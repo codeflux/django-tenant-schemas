@@ -7,6 +7,7 @@ from tenant_schemas.utils import get_public_schema_name
 
 ORIGINAL_BACKEND = getattr(settings, 'ORIGINAL_BACKEND', 'django.db.backends.postgresql_psycopg2')
 
+import_module(ORIGINAL_BACKEND)
 original_backend = import_module('.base', ORIGINAL_BACKEND)
 
 EXTRA_SEARCH_PATHS = getattr(settings, 'PG_EXTRA_SEARCH_PATHS', [])
