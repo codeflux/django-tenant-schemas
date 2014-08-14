@@ -19,6 +19,12 @@ class Command(SyncCommon):
         if self.sync_tenant:
             self.migrate_tenant_apps(self.schema_name)
 
+    def _reset_managed_apps(self, included_apps):
+        for app in included_apps:
+            app_label = app.split('.')[-1]
+            if app_label in settings.SOUTH_MIGRATION_MODULES:
+                del settings.SOUTH_MIGRATION_MODULES[app_label]
+
     def _set_managed_apps(self, included_apps, excluded_apps):
         """ while sync_schemas works by setting which apps are managed, on south we set which apps should be ignored """
         ignored_apps = []
@@ -46,9 +52,28 @@ class Command(SyncCommon):
             delattr(mig._application, "migrations")
         Migrations._clear_cache()
 
+    def _migrate_schema_step(self, tenant, include_public):
+        connection.set_tenant(tenant, include_public=include_public)
+        MigrateCommand().execute(**self.options)
+
     def _migrate_schema(self, tenant):
-        connection.set_tenant(tenant, include_public=False)
-        MigrateCommand().execute(*self.args, **self.options)
+        # Two pass migrate: First, migrate overriden apps
+        # (i.e. in both shared and tenant schemas)
+        tenant_only_apps = tuple(filter(lambda a: a not in self.shared_apps,
+                                        self.tenant_apps))
+        overriden_apps = tuple(filter(lambda a: a not in tenant_only_apps,
+                                      self.tenant_apps))
+
+        self._set_managed_apps(included_apps=overriden_apps,
+                               excluded_apps=self.shared_apps + tenant_only_apps)
+        self._migrate_schema_step(tenant, include_public=False)
+
+        self._reset_managed_apps(self.tenant_apps)
+
+        # Migrate tenant-only apps
+        self._set_managed_apps(included_apps=tenant_only_apps,
+                               excluded_apps=overriden_apps + overriden_apps)
+        self._migrate_schema_step(tenant, include_public=True)
 
     def migrate_tenant_apps(self, schema_name=None):
         self._save_south_settings()
@@ -69,6 +94,7 @@ class Command(SyncCommon):
             for tenant in all_tenants:
                 Migrations._dependencies_done = False  # very important, the dependencies need to be purged from cache
                 self._notice("=== Running migrate for schema %s" % tenant.schema_name)
+
                 self._migrate_schema(tenant)
 
         self._restore_south_settings()
